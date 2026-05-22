@@ -47,21 +47,24 @@ def analyze_utility(room_id: str):
     ai_comment = None
     if warnings:
         prompt = f"""
-            Dữ liệu tiêu thụ:
+            Bạn là hệ thống cảnh báo tiêu thụ điện nước.
 
-            Tháng hiện tại:
-            - Điện: {curr_elec}
-            - Nước: {curr_water}
+            CHỈ được trả lời theo format sau, tối đa 6 dòng:
 
-            Tháng trước:
-            - Điện: {prev_elec}
-            - Nước: {prev_water}
+            MoM:
+            - Điện: %
+            - Nước: %
 
-            Cảnh báo:
+            YoY:
+            - Điện: chỉ ghi "N/A nếu không có dữ liệu"
+            - Nước: chỉ ghi "N/A nếu không có dữ liệu"
+
+            Nguyên nhân: 1-2 ý ngắn
+            Hành động: 2-3 gạch đầu dòng
+
+            Không giải thích dài. Không ví dụ. Không mở rộng.
+            Dữ liệu:
             {', '.join(warnings)}
-
-            Hãy phân tích MoM + YoY nếu có thể, theo format:
-            ...
         """
         response = client.models.generate_content(
             model="gemini-2.5-flash",
