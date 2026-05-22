@@ -1,5 +1,6 @@
-# main.py
 from fastapi import FastAPI
+from core.db import get_connection
+from routers import utility
 
 app = FastAPI(
     title="SmartRent AI Service",
@@ -10,3 +11,30 @@ app = FastAPI(
 @app.get("/")
 def root():
     return {"message": "SmartRent AI Service is running"}
+
+
+@app.get("/db-test")
+def db_test():
+    conn = get_connection()
+
+    if not conn:
+        return {"status": "error", "message": "Cannot connect DB"}
+
+    cur = conn.cursor()
+    cur.execute("SELECT 1;")
+    result = cur.fetchone()
+    conn.close()
+
+    return {"status": "ok", "result": result}
+
+app.include_router(utility.router, prefix="/utility", tags=["Utility"])
+
+@app.get("/test-utility")
+def test_utility():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM utility_logs LIMIT 5")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {"rows": rows}
