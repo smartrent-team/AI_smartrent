@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from core.db import get_connection
 from routers import utility
 
@@ -6,6 +7,14 @@ app = FastAPI(
     title="SmartRent AI Service",
     description="Microservice phân tích điện nước và tạo hóa đơn",
     version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.get("/")
