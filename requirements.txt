@@ -10,6 +10,9 @@ colorama==0.4.6
 cryptography==48.0.0
 deprecation==2.1.0
 fastapi==0.136.1
+python-multipart==0.0.20
+google-genai>=1.0.0
+psycopg2-binary>=2.9.9
 fsspec==2026.4.0
 h11==0.16.0
 h2==4.3.0
