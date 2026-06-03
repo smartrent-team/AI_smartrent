@@ -2,6 +2,7 @@ import base64
 import json
 import re
 
+# pyrefly: ignore [missing-import]
 from google.genai import types
 
 from core.ai import client

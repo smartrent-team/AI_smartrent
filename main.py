@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.db import get_connection
-from routers import cccd, utility, ticket
+from routers import cccd, utility, ticket, contract
 
 app = FastAPI(
     title="SmartRent AI Service",
@@ -39,6 +39,7 @@ def db_test():
 app.include_router(utility.router, prefix="/utility", tags=["Utility"])
 app.include_router(cccd.router, prefix="/cccd", tags=["CCCD"])
 app.include_router(ticket.router, prefix="/ticket", tags=["Ticket"])
+app.include_router(contract.router, prefix="/contract", tags=["Contract"])
 
 @app.get("/test-utility")
 def test_utility():
