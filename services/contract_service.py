@@ -19,6 +19,22 @@ ALLOWED_MIME_TYPES = {
     "image/heic",
     "image/heif",
 }
+CONTRACT_MODELS_TO_TRY = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-lite",
+]
+RETRYABLE_AI_ERROR_MARKERS = (
+    "429",
+    "503",
+    "resource_exhausted",
+    "unavailable",
+    "high demand",
+    "rate limit",
+    "quota exceeded",
+    "temporarily unavailable",
+)
 
 CONTRACT_EXPIRY_PROMPT = """Báo là hệ thống OCR hợp đồng thuê nhà.
 Nhiệm vụ: đọc ảnh hợp đồng và chỉ trích xuất ngày hết hạn hợp đồng.
@@ -111,6 +127,30 @@ def parse_contract_expiry_ai_response(text: str) -> dict:
     }
 
 
+def _is_retryable_ai_error(exc: Exception | None) -> bool:
+    if exc is None:
+        return False
+
+    message = str(exc).lower()
+    return any(marker in message for marker in RETRYABLE_AI_ERROR_MARKERS)
+
+
+def _generate_contract_analysis(contents):
+    last_exc = None
+
+    for model_name in CONTRACT_MODELS_TO_TRY:
+        try:
+            return client.models.generate_content(
+                model=model_name,
+                contents=contents,
+            ), None
+        except Exception as exc:
+            last_exc = exc
+            print(f"Model {model_name} failed: {exc}. Trying next model...")
+
+    return None, last_exc
+
+
 def scan_contract_expiry_from_bytes(image_bytes: bytes, mime_type: str | None = None) -> dict:
     if not GEMINI_API_KEY:
         return {
@@ -143,31 +183,32 @@ def scan_contract_expiry_from_bytes(image_bytes: bytes, mime_type: str | None = 
             "data": None,
         }
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part(
-                            inline_data=types.Blob(
-                                data=image_bytes,
-                                mime_type=resolved_mime,
-                            )
-                        ),
-                        types.Part(text=CONTRACT_EXPIRY_PROMPT),
-                    ],
-                )
-            ],
-        )
-        parsed = parse_contract_expiry_ai_response(response.text or "")
-    except Exception as exc:
+    response, last_exc = _generate_contract_analysis(
+        [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(
+                        inline_data=types.Blob(
+                            data=image_bytes,
+                            mime_type=resolved_mime,
+                        )
+                    ),
+                    types.Part(text=CONTRACT_EXPIRY_PROMPT),
+                ],
+            )
+        ]
+    )
+
+    if response is None:
         return {
             "success": False,
-            "error": f"Lỗi khi gọi AI: {exc}",
+            "error": f"Lỗi khi gọi AI: {last_exc}",
             "data": None,
+            "retryable": _is_retryable_ai_error(last_exc),
         }
+
+    parsed = parse_contract_expiry_ai_response(response.text or "")
 
     if parsed.get("error"):
         return {
@@ -261,26 +302,27 @@ def scan_contract_expiry_from_batch(
     if not image_parts:
         return {"success": False, "error": "Không có ảnh hợp lệ để quét", "data": None}
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        *image_parts,
-                        types.Part(text=CONTRACT_EXPIRY_PROMPT),
-                    ],
-                )
-            ],
-        )
-        parsed = parse_contract_expiry_ai_response(response.text or "")
-    except Exception as exc:
+    response, last_exc = _generate_contract_analysis(
+        [
+            types.Content(
+                role="user",
+                parts=[
+                    *image_parts,
+                    types.Part(text=CONTRACT_EXPIRY_PROMPT),
+                ],
+            )
+        ]
+    )
+
+    if response is None:
         return {
             "success": False,
-            "error": f"Lỗi khi gọi AI: {exc}",
+            "error": f"Lỗi khi gọi AI: {last_exc}",
             "data": None,
+            "retryable": _is_retryable_ai_error(last_exc),
         }
+
+    parsed = parse_contract_expiry_ai_response(response.text or "")
 
     if parsed.get("error"):
         return {

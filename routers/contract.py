@@ -37,7 +37,8 @@ async def scan_contract_expiry_upload(
     result = scan_contract_expiry_from_bytes(image_bytes, content_type or None)
 
     if not result["success"]:
-        raise HTTPException(status_code=422, detail=result)
+        status_code = 503 if result.get("retryable") else 422
+        raise HTTPException(status_code=status_code, detail=result)
 
     return result
 
@@ -47,7 +48,8 @@ def scan_contract_expiry_json(body: ContractScanBase64Request):
     result = scan_contract_expiry_from_base64(body.image_base64, body.mime_type)
 
     if not result["success"]:
-        raise HTTPException(status_code=422, detail=result)
+        status_code = 503 if result.get("retryable") else 422
+        raise HTTPException(status_code=status_code, detail=result)
 
     return result
 
@@ -57,6 +59,7 @@ def scan_contract_expiry_batch_json(body: ContractScanBatchRequest):
     result = scan_contract_expiry_from_batch(body.images_base64, body.mime_types)
 
     if not result["success"]:
-        raise HTTPException(status_code=422, detail=result)
+        status_code = 503 if result.get("retryable") else 422
+        raise HTTPException(status_code=status_code, detail=result)
 
     return result
