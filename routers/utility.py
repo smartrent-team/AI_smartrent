@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter
 from services.utility_service import analyze_utility, trigger_utility_ai_analysis
 
