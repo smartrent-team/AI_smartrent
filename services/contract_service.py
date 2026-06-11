@@ -36,7 +36,7 @@ RETRYABLE_AI_ERROR_MARKERS = (
     "temporarily unavailable",
 )
 
-CONTRACT_EXPIRY_PROMPT = """Báo là hệ thống OCR hợp đồng thuê nhà.
+CONTRACT_EXPIRY_PROMPT = """Bạn là hệ thống OCR hợp đồng thuê nhà.
 Nhiệm vụ: đọc ảnh hợp đồng và chỉ trích xuất ngày hết hạn hợp đồng.
 
 Quy tắc:
@@ -365,3 +365,259 @@ def scan_contract_expiry_from_base64(image_base64: str, mime_type: str | None = 
         return {"success": False, "error": "image_base64 không hợp lệ", "data": None}
 
     return scan_contract_expiry_from_bytes(image_bytes, mime_type)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# QUÉT TIỀN CỌC TỪ ẢNH HỢP ĐỒNG
+# ═══════════════════════════════════════════════════════════════════════
+
+CONTRACT_DEPOSIT_PROMPT = """Bạn là hệ thống OCR hợp đồng thuê nhà.
+Nhiệm vụ: đọc ảnh hợp đồng và chỉ trích xuất số tiền đặt cọc (tiền cọc).
+
+Quy tắc:
+- deposit_amount: trả về số tiền đặt cọc (chỉ số nguyên, không có dấu chấm, dấu phẩy, không có đơn vị tiền tệ)
+- Tìm các từ khóa: "tiền cọc", "tiền đặt cọc", "đặt cọc", "khoản cọc", "deposit"
+- Nếu hợp đồng ghi "2.000.000 đồng" thì trả về 2000000
+- Nếu hợp đồng ghi "2 triệu" thì trả về 2000000
+- Nếu không thấy tiền cọc hoặc ảnh quá mờ: để deposit_amount là 0 và ghi error ngắn
+- Chỉ trả về 1 object JSON hợp lệ, không markdown, không giải thích thêm
+
+{ "deposit_amount": 0, "error": "" }"""
+
+
+def _normalize_deposit_amount(raw) -> int:
+    """Chuẩn hóa giá trị tiền cọc từ kết quả AI."""
+    if raw is None:
+        return 0
+
+    if isinstance(raw, (int, float)):
+        return max(0, int(raw))
+
+    value = str(raw).strip().lower()
+    if not value:
+        return 0
+
+    # Xóa đơn vị tiền tệ
+    for unit in ("đồng", "đ", "vnd", "vnđ", "dong"):
+        value = value.replace(unit, "")
+
+    # Xóa dấu chấm, dấu phẩy phân cách hàng nghìn
+    value = value.replace(".", "").replace(",", "").strip()
+
+    # Xử lý "triệu"
+    if "triệu" in value or "trieu" in value:
+        value = re.sub(r"(triệu|trieu)", "", value).strip()
+        try:
+            return max(0, int(float(value) * 1_000_000))
+        except ValueError:
+            return 0
+
+    try:
+        return max(0, int(float(value)))
+    except ValueError:
+        # Thử tìm chuỗi số trong text
+        match = re.search(r"\d+", value)
+        if match:
+            return max(0, int(match.group(0)))
+        return 0
+
+
+def parse_contract_deposit_ai_response(text: str) -> dict:
+    """Parse JSON response từ AI cho tiền cọc."""
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", (text or "").strip())
+    candidates = [cleaned]
+    match = re.search(r"\{[\s\S]*\}", cleaned)
+    if match:
+        candidates.insert(0, match.group(0))
+
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+            if not isinstance(data, dict):
+                continue
+
+            deposit_amount = _normalize_deposit_amount(
+                data.get("deposit_amount")
+                or data.get("tien_coc")
+                or data.get("deposit")
+                or 0
+            )
+            error = str(data.get("error", "")).strip() or None
+
+            return {
+                "deposit_amount": deposit_amount,
+                "error": error,
+            }
+        except json.JSONDecodeError:
+            continue
+
+    return {
+        "deposit_amount": 0,
+        "error": "Không phân tích được phản hồi AI",
+    }
+
+
+def scan_contract_deposit_from_bytes(image_bytes: bytes, mime_type: str | None = None) -> dict:
+    """Quét tiền cọc từ ảnh hợp đồng (bytes)."""
+    if not GEMINI_API_KEY:
+        return {"success": False, "error": "Thiếu GEMINI_API_KEY trong cấu hình server", "data": None}
+
+    if not image_bytes:
+        return {"success": False, "error": "Ảnh trống", "data": None}
+
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        return {"success": False, "error": "Ảnh quá lớn (tối đa 8MB)", "data": None}
+
+    resolved_mime = (mime_type or _guess_mime_from_bytes(image_bytes)).lower()
+    if resolved_mime == "image/jpg":
+        resolved_mime = "image/jpeg"
+    if resolved_mime not in ALLOWED_MIME_TYPES:
+        return {"success": False, "error": "Định dạng ảnh không hỗ trợ (jpeg, png, webp)", "data": None}
+
+    response, last_exc = _generate_contract_analysis(
+        [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(
+                        inline_data=types.Blob(
+                            data=image_bytes,
+                            mime_type=resolved_mime,
+                        )
+                    ),
+                    types.Part(text=CONTRACT_DEPOSIT_PROMPT),
+                ],
+            )
+        ]
+    )
+
+    if response is None:
+        return {
+            "success": False,
+            "error": f"Lỗi khi gọi AI: {last_exc}",
+            "data": None,
+            "retryable": _is_retryable_ai_error(last_exc),
+        }
+
+    parsed = parse_contract_deposit_ai_response(response.text or "")
+
+    if parsed.get("error"):
+        return {
+            "success": False,
+            "error": parsed["error"],
+            "data": {"deposit_amount": parsed.get("deposit_amount", 0)},
+        }
+
+    deposit_amount = parsed.get("deposit_amount", 0)
+    if deposit_amount <= 0:
+        return {
+            "success": False,
+            "error": "Không đọc được tiền cọc trong hợp đồng. Hãy chụp rõ phần tiền cọc.",
+            "data": {"deposit_amount": 0},
+        }
+
+    return {
+        "success": True,
+        "error": None,
+        "data": {"deposit_amount": deposit_amount},
+    }
+
+
+def scan_contract_deposit_from_batch(
+    images_base64: list[str],
+    mime_types: list[str | None] | None = None,
+) -> dict:
+    """Quét tiền cọc từ nhiều ảnh hợp đồng cùng lúc."""
+    if not images_base64:
+        return {"success": False, "error": "Thiếu danh sách ảnh", "data": None}
+
+    if len(images_base64) > MAX_BATCH_IMAGES:
+        return {"success": False, "error": f"Quá nhiều ảnh (tối đa {MAX_BATCH_IMAGES})", "data": None}
+
+    if mime_types is None:
+        mime_types = [None] * len(images_base64)
+    if len(mime_types) < len(images_base64):
+        mime_types = mime_types + [None] * (len(images_base64) - len(mime_types))
+
+    if not GEMINI_API_KEY:
+        return {"success": False, "error": "Thiếu GEMINI_API_KEY trong cấu hình server", "data": None}
+
+    image_parts = []
+    for idx, raw in enumerate(images_base64):
+        payload = (raw or "").strip()
+        if not payload:
+            continue
+
+        if "," in payload and payload.startswith("data:"):
+            header, _, encoded = payload.partition(",")
+            if not mime_types[idx] and ";" in header:
+                mime_types[idx] = header.split(";")[0].replace("data:", "")
+            payload = encoded
+
+        try:
+            image_bytes = base64.b64decode(payload, validate=True)
+        except Exception:
+            return {"success": False, "error": f"Ảnh thứ {idx + 1} không hợp lệ", "data": None}
+
+        resolved_mime = (mime_types[idx] or _guess_mime_from_bytes(image_bytes)).lower()
+        if resolved_mime == "image/jpg":
+            resolved_mime = "image/jpeg"
+        if resolved_mime not in ALLOWED_MIME_TYPES:
+            resolved_mime = _guess_mime_from_bytes(image_bytes)
+        if resolved_mime not in ALLOWED_MIME_TYPES:
+            return {"success": False, "error": f"Định dạng ảnh thứ {idx + 1} không hỗ trợ", "data": None}
+
+        image_parts.append(
+            types.Part(
+                inline_data=types.Blob(
+                    data=image_bytes,
+                    mime_type=resolved_mime,
+                )
+            )
+        )
+
+    if not image_parts:
+        return {"success": False, "error": "Không có ảnh hợp lệ để quét", "data": None}
+
+    response, last_exc = _generate_contract_analysis(
+        [
+            types.Content(
+                role="user",
+                parts=[
+                    *image_parts,
+                    types.Part(text=CONTRACT_DEPOSIT_PROMPT),
+                ],
+            )
+        ]
+    )
+
+    if response is None:
+        return {
+            "success": False,
+            "error": f"Lỗi khi gọi AI: {last_exc}",
+            "data": None,
+            "retryable": _is_retryable_ai_error(last_exc),
+        }
+
+    parsed = parse_contract_deposit_ai_response(response.text or "")
+
+    if parsed.get("error"):
+        return {
+            "success": False,
+            "error": parsed["error"],
+            "data": {"deposit_amount": parsed.get("deposit_amount", 0)},
+        }
+
+    deposit_amount = parsed.get("deposit_amount", 0)
+    if deposit_amount <= 0:
+        return {
+            "success": False,
+            "error": "Không đọc được tiền cọc trong các ảnh hợp đồng.",
+            "data": {"deposit_amount": 0},
+        }
+
+    return {
+        "success": True,
+        "error": None,
+        "data": {"deposit_amount": deposit_amount},
+    }

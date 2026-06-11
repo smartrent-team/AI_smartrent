@@ -1,12 +1,16 @@
 from typing import Optional
 
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, File, HTTPException, UploadFile
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, Field
 
 from services.contract_service import (
     scan_contract_expiry_from_batch,
     scan_contract_expiry_from_base64,
     scan_contract_expiry_from_bytes,
+    scan_contract_deposit_from_bytes,
+    scan_contract_deposit_from_batch,
 )
 
 router = APIRouter()
@@ -57,6 +61,34 @@ def scan_contract_expiry_json(body: ContractScanBase64Request):
 @router.post("/scan-expiry-batch")
 def scan_contract_expiry_batch_json(body: ContractScanBatchRequest):
     result = scan_contract_expiry_from_batch(body.images_base64, body.mime_types)
+
+    if not result["success"]:
+        status_code = 503 if result.get("retryable") else 422
+        raise HTTPException(status_code=status_code, detail=result)
+
+    return result
+
+
+@router.post("/scan-deposit")
+async def scan_contract_deposit_upload(
+    file: UploadFile = File(..., description="Ảnh hợp đồng để quét tiền cọc"),
+):
+    """Quét tiền cọc từ ảnh hợp đồng (upload file)."""
+    content_type = (file.content_type or "").lower()
+    image_bytes = await file.read()
+    result = scan_contract_deposit_from_bytes(image_bytes, content_type or None)
+
+    if not result["success"]:
+        status_code = 503 if result.get("retryable") else 422
+        raise HTTPException(status_code=status_code, detail=result)
+
+    return result
+
+
+@router.post("/scan-deposit-batch")
+def scan_contract_deposit_batch_json(body: ContractScanBatchRequest):
+    """Quét tiền cọc từ nhiều ảnh hợp đồng (base64 batch)."""
+    result = scan_contract_deposit_from_batch(body.images_base64, body.mime_types)
 
     if not result["success"]:
         status_code = 503 if result.get("retryable") else 422
