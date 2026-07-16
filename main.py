@@ -2,11 +2,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.db import get_connection
 from routers import cccd, utility, ticket, contract
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+# Khi chạy qua proxy của Next.js (Ngrok), đặt ROOT_PATH=/python trong file .env
+# để Swagger UI (/docs) hoạt động đúng qua đường dẫn /python/docs
+root_path = os.getenv("ROOT_PATH", "")
 
 app = FastAPI(
     title="SmartRent AI Service",
     description="Microservice phân tích điện nước và tạo hóa đơn",
     version="1.0.0",
+    root_path=root_path,
 )
 
 app.add_middleware(
