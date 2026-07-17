@@ -8,6 +8,12 @@ from services.cccd_service import scan_cccd_from_base64, scan_cccd_from_bytes
 router = APIRouter()
 
 
+def _raise_scan_error(result: dict) -> None:
+    """Map an OCR failure to an HTTP status meaningful to API clients."""
+    status_code = result.pop("status_code", 422)
+    raise HTTPException(status_code=status_code, detail=result)
+
+
 class CccdScanBase64Request(BaseModel):
     image_base64: str = Field(..., description="Ảnh CCCD encode base64 (có hoặc không prefix data:image/...)")
     mime_type: Optional[str] = Field(
@@ -26,7 +32,7 @@ async def scan_cccd_upload(file: UploadFile = File(..., description="Ảnh mặt
     result = scan_cccd_from_bytes(image_bytes, content_type or None)
 
     if not result["success"]:
-        raise HTTPException(status_code=422, detail=result)
+        _raise_scan_error(result)
 
     return result
 
@@ -39,6 +45,6 @@ def scan_cccd_json(body: CccdScanBase64Request):
     result = scan_cccd_from_base64(body.image_base64, body.mime_type)
 
     if not result["success"]:
-        raise HTTPException(status_code=422, detail=result)
+        _raise_scan_error(result)
 
     return result

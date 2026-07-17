@@ -1,6 +1,7 @@
 import base64
 import json
 import re
+import time
 
 # pyrefly: ignore [missing-import]
 from google.genai import types
@@ -9,6 +10,7 @@ from core.ai import client
 from core.config import GEMINI_API_KEY
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+AI_RETRY_ATTEMPTS = 3
 ALLOWED_MIME_TYPES = {
     "image/jpeg",
     "image/jpg",
@@ -38,6 +40,55 @@ def _guess_mime_from_bytes(data: bytes) -> str:
     if data[:4] == b"RIFF" and len(data) > 12 and data[8:12] == b"WEBP":
         return "image/webp"
     return "image/jpeg"
+
+
+def _provider_status_code(exc: Exception) -> int | None:
+    """Extract an HTTP status without depending on a google-genai exception type."""
+    for attribute in ("status_code", "code", "status"):
+        value = getattr(exc, attribute, None)
+        if isinstance(value, int):
+            return value
+    match = re.search(r"\b(429|500|502|503|504)\b", str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _failure(error: str, *, status_code: int = 422, data: dict | None = None) -> dict:
+    return {
+        "success": False,
+        "error": error,
+        "data": data,
+        "status_code": status_code,
+    }
+
+
+def _generate_cccd_content(image_bytes: bytes, mime_type: str):
+    """Retry only temporary Gemini failures so a burst does not fail a scan."""
+    last_error: Exception | None = None
+    for attempt in range(AI_RETRY_ATTEMPTS):
+        try:
+            return client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part(
+                                inline_data=types.Blob(data=image_bytes, mime_type=mime_type)
+                            ),
+                            types.Part(text=CCCD_PROMPT),
+                        ],
+                    )
+                ],
+            )
+        except Exception as exc:
+            last_error = exc
+            if _provider_status_code(exc) not in {429, 500, 502, 503, 504}:
+                raise
+            if attempt < AI_RETRY_ATTEMPTS - 1:
+                time.sleep(0.5 * (2**attempt))
+
+    assert last_error is not None
+    raise last_error
 
 
 def normalize_cccd_number(raw: str) -> str:
@@ -97,7 +148,11 @@ def scan_cccd_from_bytes(image_bytes: bytes, mime_type: str | None = None) -> di
             "data": None,
         }
 
-    resolved_mime = (mime_type or _guess_mime_from_bytes(image_bytes)).lower()
+    resolved_mime = (mime_type or "").lower()
+    # Camera bytes can be labelled application/octet-stream by multipart clients.
+    # Read the file signature instead of rejecting a valid image upload.
+    if not resolved_mime or resolved_mime == "application/octet-stream":
+        resolved_mime = _guess_mime_from_bytes(image_bytes)
     if resolved_mime == "image/jpg":
         resolved_mime = "image/jpeg"
     if resolved_mime not in ALLOWED_MIME_TYPES:
@@ -108,25 +163,14 @@ def scan_cccd_from_bytes(image_bytes: bytes, mime_type: str | None = None) -> di
         }
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part(
-                            inline_data=types.Blob(
-                                data=image_bytes,
-                                mime_type=resolved_mime,
-                            )
-                        ),
-                        types.Part(text=CCCD_PROMPT),
-                    ],
-                )
-            ],
-        )
+        response = _generate_cccd_content(image_bytes, resolved_mime)
         parsed = parse_cccd_ai_response(response.text or "")
     except Exception as exc:
+        if _provider_status_code(exc) in {429, 500, 502, 503, 504}:
+            return _failure(
+                "Dich vu quet CCCD dang ban. Vui long thu lai sau it phut.",
+                status_code=503,
+            )
         return {
             "success": False,
             "error": f"Lỗi khi gọi AI: {exc}",
