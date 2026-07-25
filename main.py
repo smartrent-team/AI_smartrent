@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.db import get_connection
-from routers import cccd, utility, contract
+from routers import cccd, contract
 from dotenv import load_dotenv
 import os
 
@@ -45,16 +45,5 @@ def db_test():
 
     return {"status": "ok", "result": result}
 
-app.include_router(utility.router, prefix="/utility", tags=["Utility"])
 app.include_router(cccd.router, prefix="/cccd", tags=["CCCD"])
 app.include_router(contract.router, prefix="/contract", tags=["Contract"])
-
-@app.get("/test-utility")
-def test_utility():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM utility_logs LIMIT 5")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return {"rows": rows}
