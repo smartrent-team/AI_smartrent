@@ -1,0 +1,24 @@
+# Set default behavior to automatic text conversion with LF line endings
+* text=auto eol=lf
+
+# Explicitly handle common text file formats
+*.py text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.txt text eol=lf
+*.dockerignore text eol=lf
+Dockerfile text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.pkl binary
+*.onnx binary
+*.pth binary

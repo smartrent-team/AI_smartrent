@@ -67,7 +67,7 @@ def _generate_cccd_content(image_bytes: bytes, mime_type: str):
     for attempt in range(AI_RETRY_ATTEMPTS):
         try:
             return client.models.generate_content(
-                model="gemini-3.5-flash",
+                model="gemini-2.5-flash",
                 contents=[
                     types.Content(
                         role="user",
